@@ -244,13 +244,11 @@ async def upload_pdf(
         file_contents, filename=str(filename or ""), source="upload"
     )
     if not is_valid:
-        public_error = (
-            "Uploaded file is invalid or unsupported"
-            if error_message.startswith("Failed to")
-            else error_message
-        )
         logger.warning(f"Rejected upload for filename={filename}: {error_message}")
-        return JSONResponse(status_code=400, content={"message": public_error})
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Uploaded file is invalid or unsupported"},
+        )
 
     # Create the paper upload job
     paper_upload_job_obj = PaperUploadJobCreate(

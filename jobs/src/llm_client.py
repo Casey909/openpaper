@@ -325,7 +325,7 @@ class AsyncLLMClient:
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     }
-                    timeout_seconds = self.DEFAULT_TIMEOUT / 1000
+                    timeout_seconds = AsyncLLMClient.DEFAULT_TIMEOUT / 1000
                     async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
                         response = await http_client.post(
                             f"{base_url}/chat/completions",
