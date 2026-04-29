@@ -165,7 +165,13 @@ The following environment variables are required to run the Jobs Service:
 | `CLOUDFLARE_BUCKET_NAME`| The name of the Cloudflare R2 bucket (if used).  | Yes      |
 | `CELERY_BROKER_URL`     | The URL for the Celery message broker (RabbitMQ).   | Yes      |
 | `CELERY_RESULT_BACKEND` | The URL for the Celery result backend (Redis).   | Yes      |
-| `LLM_API_KEY`           | The API key for the LLM service.                 | Yes      |
+| `LLM_PROVIDER`          | `gemini` (default) or `openai` (OpenAI-compatible local API). | No |
+| `GOOGLE_API_KEY`        | Gemini API key (required when `LLM_PROVIDER=gemini`). | Conditional |
+| `OPENAI_API_KEY`        | API key/token for OpenAI-compatible endpoint (required when `LLM_PROVIDER=openai`). | Conditional |
+| `LLM_BASE_URL`          | Base URL for OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1`. | Required for `openai` |
+| `LLM_DEFAULT_MODEL`     | Default extraction model override.               | No       |
+| `LLM_FAST_MODEL`        | Fast extraction model override.                  | No       |
+| `EXTRACTION_MODEL`      | Per-job extraction model override.               | No       |
 
 ### Running Locally
 

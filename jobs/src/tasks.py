@@ -84,6 +84,7 @@ def upload_and_process_file(
     self,
     s3_object_key: str,
     webhook_url: str,
+    original_filename: str | None = None,
     **processing_kwargs
 ) -> Dict[str, Any]:
     """
@@ -119,6 +120,7 @@ def upload_and_process_file(
                 pdf_bytes,
                 s3_object_key,
                 task_id,
+                original_filename=original_filename,
                 status_callback=write_to_status,
             )
         )

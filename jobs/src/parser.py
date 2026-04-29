@@ -5,12 +5,12 @@ from typing import Tuple
 from io import BytesIO
 import logging
 import uuid
+from pathlib import Path
 from PIL import Image # type: ignore
 
 md = MarkItDown()
 
 from src.s3_service import s3_service
-from src.llm_client import fast_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,9 @@ def sanitize_string(text: str) -> str:
     return text.replace("\x00", "")
 
 
-def extract_text_from_pdf(file_path: str) -> str:
+def extract_text_from_document(file_path: str) -> str:
     """
-    Extract text content from a PDF file.
+    Extract text content from a supported document file.
     """
 
     def is_valid_text(text: str) -> bool:
@@ -42,11 +42,13 @@ def extract_text_from_pdf(file_path: str) -> str:
             and text.split(" ") != [""]
         )
 
+    ext = Path(file_path).suffix.lower()
+
     try:
         md_text = md.convert(file_path).markdown
         md_text = sanitize_string(md_text)
-        if not is_valid_text(md_text):
-            # Fallback to pymupdf4llm if MarkItDown fails
+        if not is_valid_text(md_text) and ext == ".pdf":
+            # Fallback to pymupdf4llm if MarkItDown fails for PDFs
             md_text = pymupdf4llm.to_markdown(file_path)
             md_text = sanitize_string(md_text)
 
@@ -57,15 +59,16 @@ def extract_text_from_pdf(file_path: str) -> str:
         return md_text
     except Exception as e:
         try:
-            # Attempt to extract text using pymupdf4llm
-            md_text = pymupdf4llm.to_markdown(file_path)
-            md_text = sanitize_string(md_text)
-            if not is_valid_text(md_text):
-                raise ValueError("No text found in the PDF file.")
-            return md_text
+            if ext == ".pdf":
+                # Attempt to extract text using pymupdf4llm
+                md_text = pymupdf4llm.to_markdown(file_path)
+                md_text = sanitize_string(md_text)
+                if not is_valid_text(md_text):
+                    raise ValueError("No text found in the PDF file.")
+                return md_text
+            raise ValueError("No text found in the document file.")
         except Exception as e:
-            # If both methods fail, raise an error
-            raise ValueError(f"Failed to extract text from PDF: {str(e)}")
+            raise ValueError(f"Failed to extract text from document: {str(e)}")
 
 
 def map_pages_to_text_offsets(
@@ -74,6 +77,9 @@ def map_pages_to_text_offsets(
     """
     Map each page of the PDF to its corresponding text offsets.
     """
+    if Path(pdf_file_path).suffix.lower() != ".pdf":
+        return {}
+
     doc = pymupdf.open(pdf_file_path)
     page_offsets = {}
     current_offset = 0
@@ -154,15 +160,15 @@ async def extract_text(
     file_path: str,
 ) -> str:
     """
-    Extract text from PDF while replacing images with placeholder IDs.
+    Extract text from a supported document while replacing images with placeholder IDs.
 
     Args:
-        file_path: Path to the PDF file
+        file_path: Path to the document file
 
     Returns:
         Tuple[str]:
         - Markdown text with image placeholders
     """
     # If image extraction is disabled, just extract text
-    md_text = extract_text_from_pdf(file_path)
+    md_text = extract_text_from_document(file_path)
     return md_text

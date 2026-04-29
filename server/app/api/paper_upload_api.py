@@ -30,7 +30,7 @@ from app.database.crud.paper_upload_crud import (
 from app.database.database import get_db
 from app.database.models import JobStatus, PaperUploadJob
 from app.database.telemetry import track_event
-from app.helpers.parser import validate_pdf_content, validate_url_and_fetch_pdf
+from app.helpers.parser import validate_upload_content, validate_url_and_fetch_pdf
 from app.helpers.pdf_jobs import jobs_client
 from app.helpers.subscription_limits import (
     can_user_access_knowledge_base,
@@ -239,8 +239,10 @@ async def upload_pdf(
             status_code=400, content={"message": "Error reading uploaded file"}
         )
 
-    # Validate PDF content
-    is_valid, error_message = await validate_pdf_content(file_contents, source="upload")
+    # Validate uploaded document content
+    is_valid, error_message = await validate_upload_content(
+        file_contents, filename=str(filename or ""), source="upload"
+    )
     if not is_valid:
         return JSONResponse(status_code=400, content={"message": error_message})
 
@@ -324,6 +326,7 @@ async def upload_raw_file_microservice(
         # Submit to microservice
         task_id = await jobs_client.submit_pdf_processing_job_with_upload(
             pdf_bytes=file_contents,
+            filename=filename,
             paper_upload_job=paper_upload_job,
             db=db,
             user=current_user,

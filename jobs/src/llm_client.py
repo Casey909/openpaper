@@ -8,11 +8,13 @@ import re
 import io
 import asyncio
 import random
+import base64
 import httpx
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from typing import Any, Dict, List, Optional, Type, TypeVar, Callable
+from markitdown import MarkItDown
 
 from pydantic import BaseModel, create_model, Field, ConfigDict
 
@@ -31,9 +33,21 @@ from src.utils import retry_llm_operation, time_it
 logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_CHAT_MODEL = "gemini-3.1-pro-preview"
-FAST_CHAT_MODEL = "gemini-3-flash-preview"
+GEMINI_DEFAULT_MODEL = "gemini-3.1-pro-preview"
+GEMINI_FAST_MODEL = "gemini-3-flash-preview"
+OPENAI_DEFAULT_MODEL = "gpt-4.1"
+OPENAI_FAST_MODEL = "gpt-4.1-mini"
+DEFAULT_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+DEFAULT_CHAT_MODEL = os.getenv(
+    "LLM_DEFAULT_MODEL",
+    GEMINI_DEFAULT_MODEL if DEFAULT_LLM_PROVIDER == "gemini" else OPENAI_DEFAULT_MODEL,
+)
+FAST_CHAT_MODEL = os.getenv(
+    "LLM_FAST_MODEL",
+    GEMINI_FAST_MODEL if DEFAULT_LLM_PROVIDER == "gemini" else OPENAI_FAST_MODEL,
+)
 CACHE_TTL_SECONDS = 3600
+md = MarkItDown()
 
 # Pydantic model type variable
 T = TypeVar("T", bound=BaseModel)
@@ -89,20 +103,30 @@ class AsyncLLMClient:
         self,
         api_key: str,
         default_model: Optional[str] = None,
+        provider: str = DEFAULT_LLM_PROVIDER,
+        base_url: Optional[str] = None,
     ):
         self.api_key = api_key
         self.default_model: str = default_model or DEFAULT_CHAT_MODEL
+        self.provider = provider.lower()
+        self.base_url = base_url
 
-    def _create_client(self, timeout: int = DEFAULT_TIMEOUT) -> genai.Client:
+    def _create_client(self, timeout: int = DEFAULT_TIMEOUT) -> Any:
         """Create a fresh client instance for thread-safe concurrent calls."""
         if not self.api_key:
             raise ValueError("API key is not set")
-        return genai.Client(
-            api_key=self.api_key,
-            http_options=types.HttpOptions(timeout=timeout),
-        )
+        if self.provider == "gemini":
+            return genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(timeout=timeout),
+            )
+        if self.provider == "openai":
+            return None
+        raise ValueError(f"Unsupported LLM provider: {self.provider}")
 
-    async def create_cache(self, cache_content: str, client: genai.Client, model: Optional[str] = None) -> str:
+    async def create_cache(
+        self, cache_content: str, client: Any, model: Optional[str] = None
+    ) -> str:
         """Create a cache entry for the given content.
 
         Args:
@@ -113,6 +137,9 @@ class AsyncLLMClient:
         Returns:
             str: The cache key for the stored content.
         """
+        if self.provider != "gemini":
+            return ""
+
         cached_content = await client.aio.caches.create(
             model=model or self.default_model,
             config=types.CreateCachedContentConfig(
@@ -139,7 +166,7 @@ class AsyncLLMClient:
     async def create_file_cache(
         self,
         file_path: str,
-        client: genai.Client,
+        client: Any,
         system_instructions: Optional[str] = None,
     ):
         """Create a cache entry for the given file.
@@ -151,6 +178,9 @@ class AsyncLLMClient:
         Returns:
             str: The cache key for the stored file.
         """
+        if self.provider != "gemini":
+            return ""
+
         # Read the file content
         with open(file_path, 'rb') as f:
             file_content = f.read()
@@ -192,7 +222,7 @@ class AsyncLLMClient:
         file_path: Optional[str] = None,
         max_retries: int = 3,
         base_delay: float = 1.0,
-        client: Optional[genai.Client] = None,
+        client: Optional[Any] = None,
     ) -> str:
         """
         Generate content using the LLM with automatic retry and exponential backoff.
@@ -207,51 +237,121 @@ class AsyncLLMClient:
         Returns:
             str: The generated content from the LLM
         """
-        if not client:
-            raise ValueError("Client is required for generate_content")
-
         if not model:
             model = self.default_model
-
-        parts = []
-        if image_bytes:
-            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type or 'image/png'))
-
-        if file_path:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-            parts.append(types.Part.from_bytes(data=file_data, mime_type='application/pdf'))
-
-
-        parts.append(types.Part.from_text(text=prompt))
-
-        config = types.GenerateContentConfig(
-            cached_content=cache_key
-        )
-
-        if schema:
-            config.response_mime_type = 'application/json'
-            config.response_schema = schema.model_json_schema()
 
         last_exception: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
             try:
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=types.Content(
-                        role='user',
-                        parts=parts
-                    ),
-                    config=config
-                )
+                if self.provider == "gemini":
+                    if not client:
+                        raise ValueError("Client is required for Gemini provider")
+                    parts = []
+                    if image_bytes:
+                        parts.append(
+                            types.Part.from_bytes(
+                                data=image_bytes,
+                                mime_type=image_mime_type or "image/png",
+                            )
+                        )
+                    if file_path:
+                        with open(file_path, "rb") as f:
+                            file_data = f.read()
+                        parts.append(
+                            types.Part.from_bytes(
+                                data=file_data, mime_type="application/pdf"
+                            )
+                        )
 
-                if response and response.text:
-                    return response.text
+                    parts.append(types.Part.from_text(text=prompt))
+                    config = types.GenerateContentConfig(cached_content=cache_key)
+                    if schema:
+                        config.response_mime_type = "application/json"
+                        config.response_schema = schema.model_json_schema()
 
-                raise ValueError("No content generated from LLM response")
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=types.Content(role="user", parts=parts),
+                        config=config,
+                    )
+                    if response and response.text:
+                        return response.text
+                    raise ValueError("No content generated from Gemini response")
 
-            except (ServerError, ClientError, APIError, httpx.TimeoutException) as e:
+                if self.provider == "openai":
+                    content_payload: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+
+                    if file_path:
+                        extracted_doc_text = md.convert(file_path).markdown
+                        content_payload.append(
+                            {
+                                "type": "text",
+                                "text": f"<document>\n{extracted_doc_text}\n</document>",
+                            }
+                        )
+
+                    if image_bytes:
+                        mime = image_mime_type or "image/png"
+                        b64 = base64.b64encode(image_bytes).decode("utf-8")
+                        content_payload.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{b64}"},
+                            }
+                        )
+
+                    payload: Dict[str, Any] = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": content_payload}],
+                    }
+                    if schema:
+                        payload["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "structured_response",
+                                "strict": True,
+                                "schema": schema.model_json_schema(),
+                            },
+                        }
+
+                    base_url = (self.base_url or "").rstrip("/")
+                    if not base_url:
+                        raise ValueError(
+                            "LLM_BASE_URL is required when LLM_PROVIDER=openai"
+                        )
+
+                    headers = {
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    }
+                    timeout_seconds = self.DEFAULT_TIMEOUT / 1000
+                    async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
+                        response = await http_client.post(
+                            f"{base_url}/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        )
+                    response.raise_for_status()
+                    data = response.json()
+                    content = (
+                        data.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content")
+                    )
+                    if isinstance(content, str) and content.strip():
+                        return content
+                    raise ValueError("No content generated from OpenAI-compatible API")
+
+                raise ValueError(f"Unsupported LLM provider: {self.provider}")
+
+            except (
+                ServerError,
+                ClientError,
+                APIError,
+                httpx.TimeoutException,
+                httpx.HTTPError,
+            ) as e:
                 last_exception = e
                 if attempt < max_retries:
                     # Exponential backoff with jitter
@@ -275,9 +375,20 @@ class PaperOperations(AsyncLLMClient):
     with actual LLM API calls (OpenAI, Anthropic, Google, etc.)
     """
 
-    def __init__(self, api_key: str, default_model: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: str,
+        default_model: Optional[str] = None,
+        provider: str = DEFAULT_LLM_PROVIDER,
+        base_url: Optional[str] = None,
+    ):
         """Initialize the LLM client for paper operations."""
-        super().__init__(api_key, default_model=default_model)
+        super().__init__(
+            api_key,
+            default_model=default_model,
+            provider=provider,
+            base_url=base_url,
+        )
 
     async def _extract_single_metadata_field(
         self,
@@ -285,7 +396,7 @@ class PaperOperations(AsyncLLMClient):
         paper_content: str,
         schema: Type[BaseModel],
         status_callback: Callable[[str], None],
-        client: genai.Client,
+        client: Any,
         cache_key: Optional[str] = None,
         llm_model: Optional[str] = None,
     ) -> T:
@@ -354,7 +465,7 @@ class PaperOperations(AsyncLLMClient):
         self,
         paper_content: str,
         status_callback: Callable[[str], None],
-        client: genai.Client,
+        client: Any,
         cache_key: Optional[str] = None,
         llm_model: Optional[str] = None,
     ) -> TitleAuthorsAbstract:
@@ -374,7 +485,7 @@ class PaperOperations(AsyncLLMClient):
         self,
         paper_content: str,
         status_callback: Callable[[str], None],
-        client: genai.Client,
+        client: Any,
         cache_key: Optional[str] = None,
         llm_model: Optional[str] = None,
     ) -> InstitutionsKeywords:
@@ -393,7 +504,7 @@ class PaperOperations(AsyncLLMClient):
         self,
         paper_content: str,
         status_callback: Callable[[str], None],
-        client: genai.Client,
+        client: Any,
         cache_key: Optional[str] = None,
         llm_model: Optional[str] = None,
     ) -> SummaryAndCitations:
@@ -413,7 +524,7 @@ class PaperOperations(AsyncLLMClient):
         self,
         paper_content: str,
         status_callback: Callable[[str], None],
-        client: genai.Client,
+        client: Any,
         cache_key: Optional[str] = None,
         llm_model: Optional[str] = None,
     ) -> Highlights:
@@ -533,6 +644,9 @@ class PaperOperations(AsyncLLMClient):
                 if status_callback:
                     status_callback(f"Error during metadata extraction: {e}")
                 raise ValueError(f"Failed to extract metadata: {str(e)}")
+            finally:
+                if client and hasattr(client, "aclose"):
+                    await client.aclose()
 
     async def extract_data_table(
         self,
@@ -599,13 +713,29 @@ class PaperOperations(AsyncLLMClient):
         except Exception as e:
             logger.error(f"Error extracting data table: {str(e)}", exc_info=True)
             raise ValueError(f"Failed to extract DT for paper {paper_id}: {str(e)}")
+        finally:
+            if client and hasattr(client, "aclose"):
+                await client.aclose()
 
 
 # Create a single instance to use throughout the application
-api_key = os.getenv("GOOGLE_API_KEY")
+provider = DEFAULT_LLM_PROVIDER
+api_key_env = "GOOGLE_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+api_key = os.getenv(api_key_env)
+base_url = os.getenv("LLM_BASE_URL")
 
 if not api_key:
-    raise ValueError("GOOGLE_API_KEY environment variable is not set")
+    raise ValueError(f"{api_key_env} environment variable is not set")
 
-llm_client = PaperOperations(api_key=api_key, default_model=DEFAULT_CHAT_MODEL)
-fast_llm_client = PaperOperations(api_key=api_key, default_model=FAST_CHAT_MODEL)
+llm_client = PaperOperations(
+    api_key=api_key,
+    default_model=DEFAULT_CHAT_MODEL,
+    provider=provider,
+    base_url=base_url,
+)
+fast_llm_client = PaperOperations(
+    api_key=api_key,
+    default_model=FAST_CHAT_MODEL,
+    provider=provider,
+    base_url=base_url,
+)

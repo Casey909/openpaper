@@ -5,6 +5,15 @@ import { Button } from "@/components/ui/button";
 import { UploadCloud } from 'lucide-react';
 
 const MAX_PAPERS_TO_UPLOAD = 10;
+const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.pptx', '.html', '.htm', '.txt', '.md'];
+const SUPPORTED_MIME_TYPES = new Set([
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/html',
+    'text/plain',
+    'text/markdown',
+]);
 
 interface PdfDropzoneProps {
     onFileSelect: (files: File[]) => void;
@@ -19,10 +28,14 @@ export function PdfDropzone({ onFileSelect, onUrlClick, maxSizeMb = 30, disabled
     const [error, setError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const maxSize = maxSizeMb * 1024 * 1024; // Convert MB to bytes
+    const inputAccept = SUPPORTED_EXTENSIONS.join(',');
 
     const handleFileValidation = (file: File): boolean => {
-        if (file.type !== 'application/pdf') {
-            setError('Invalid file type. Please upload a PDF.');
+        const lowerName = file.name.toLowerCase();
+        const hasSupportedExtension = SUPPORTED_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+        const hasSupportedMime = !!file.type && SUPPORTED_MIME_TYPES.has(file.type);
+        if (!hasSupportedExtension && !hasSupportedMime) {
+            setError('Invalid file type. Please upload PDF, DOCX, PPTX, HTML, TXT, or MD.');
             return false;
         }
         if (file.size > maxSize) {
@@ -116,7 +129,7 @@ export function PdfDropzone({ onFileSelect, onUrlClick, maxSizeMb = 30, disabled
                 <input
                     type="file"
                     ref={fileInputRef}
-                    accept=".pdf"
+                    accept={inputAccept}
                     className="hidden"
                     onChange={handleFileInputChange}
                     multiple={maxPapers > 1}
@@ -129,7 +142,7 @@ export function PdfDropzone({ onFileSelect, onUrlClick, maxSizeMb = 30, disabled
                 <p className="text-sm text-muted-foreground mt-1">
                     {maxPapers === 1
                         ? `Upload a paper up to ${maxSizeMb}MB`
-                        : `Select up to ${maxPapers} papers, up to ${maxSizeMb}MB each`}
+                        : `Select up to ${maxPapers} files, up to ${maxSizeMb}MB each`}
                 </p>
                 {error && <p className="text-sm text-destructive mt-2">{error}</p>}
             </div>

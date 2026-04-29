@@ -8,6 +8,7 @@ to the separate jobs service worker, and uses the HTTP API to check task status.
 import logging
 import os
 import time
+from pathlib import Path
 from io import BytesIO
 from typing import Any, Dict, Optional
 from uuid import UUID
@@ -61,7 +62,9 @@ class JobsClient:
             "CELERY_API_URL", "http://localhost:8001"
         )
 
-    def submit_pdf_processing_job(self, s3_object_key: str, job_id: str) -> str:
+    def submit_pdf_processing_job(
+        self, s3_object_key: str, job_id: str, original_filename: Optional[str] = None
+    ) -> str:
         """
         Submit a PDF processing job to the separate Celery service.
 
@@ -113,7 +116,11 @@ class JobsClient:
             # Submit the task to the queue (the separate jobs service will pick it up)
             task = celery_app.send_task(
                 "upload_and_process_file",  # Task name as registered by the worker
-                kwargs={"s3_object_key": s3_object_key, "webhook_url": webhook_url},
+                kwargs={
+                    "s3_object_key": s3_object_key,
+                    "webhook_url": webhook_url,
+                    "original_filename": original_filename,
+                },
             )
 
             print(f"DEBUG: Task submitted successfully with ID: {task.id}")
@@ -279,6 +286,7 @@ class JobsClient:
     async def submit_pdf_processing_job_with_upload(
         self,
         pdf_bytes: bytes,
+        filename: str,
         paper_upload_job: PaperUploadJob,
         db: Session,
         user: CurrentUser,
@@ -309,8 +317,10 @@ class JobsClient:
 
         job_id = str(paper_upload_job.id)
 
-        # Generate filename based on job_id
-        filename = f"{job_id}.pdf"
+        # Preserve file extension for downstream parser selection.
+        ext = Path(filename or "").suffix.lower()
+        safe_ext = ext if ext else ".pdf"
+        filename = f"{job_id}{safe_ext}"
 
         logger.info(
             f"Uploading PDF and submitting job - Size: {len(pdf_bytes)} bytes, Filename: {filename}, Job ID: {job_id}"
@@ -384,7 +394,9 @@ class JobsClient:
             db_committed = True
 
             # Submit processing job with S3 object key
-            task_id = self.submit_pdf_processing_job(s3_object_key, job_id)
+            task_id = self.submit_pdf_processing_job(
+                s3_object_key, job_id, original_filename=filename
+            )
 
             return task_id
 

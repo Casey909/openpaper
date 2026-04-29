@@ -1,5 +1,6 @@
 import io
 import logging
+from pathlib import Path
 from datetime import datetime
 from typing import Tuple
 
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_SIZE_MB = 30
 DOCUMENT_PAGE_LIMIT = 800
+SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
 
 
 def get_start_page_from_offset(offsets: dict[int, Tuple[int, int]], offset: int) -> int:
@@ -97,13 +99,11 @@ async def validate_pdf_content(
             first_page = reader.pages[0]
             text = first_page.extract_text()
 
-            # Check if we can extract any text (even if minimal)
-            # Some PDFs might be image-only but still valid
+            # Some PDFs are image-only/scanned and can still be processed with OCR paths.
             if len(text.strip()) < 10:
                 logger.warning(
                     f"PDF from {source} has minimal text content - might be image-only"
                 )
-                return False, "PDF appears to have minimal text content"
 
         except Exception as e:
             return False, f"PDF structure is corrupted or unreadable: {str(e)}"
@@ -113,6 +113,36 @@ async def validate_pdf_content(
     except Exception as e:
         logger.error(f"Error validating PDF: {str(e)}")
         return False, f"Failed to validate PDF: {str(e)}"
+
+
+async def validate_upload_content(
+    file_bytes: bytes,
+    filename: str,
+    source: str = "upload",
+) -> tuple[bool, str]:
+    """
+    Validate uploaded content for supported knowledge-base document types.
+    Returns (is_valid, error_message).
+    """
+    try:
+        if len(file_bytes) > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+            return False, f"File too large (max {MAX_UPLOAD_SIZE_MB}MB)"
+
+        if len(file_bytes) < 256:
+            return False, "File too small to be processed"
+
+        ext = Path(filename or "").suffix.lower()
+        if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
+            supported = ", ".join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))
+            return False, f"Unsupported file type. Supported types: {supported}"
+
+        if ext == ".pdf" or _detect_pdf_mime_type(file_bytes):
+            return await validate_pdf_content(file_bytes, source=source)
+
+        return True, ""
+    except Exception as e:
+        logger.error(f"Error validating upload content: {str(e)}")
+        return False, f"Failed to validate uploaded file: {str(e)}"
 
 
 async def validate_url_and_fetch_pdf(url: str) -> tuple[bool, bytes, str]:
