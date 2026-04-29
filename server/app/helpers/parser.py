@@ -142,7 +142,7 @@ async def validate_upload_content(
         return True, ""
     except Exception as e:
         logger.error(f"Error validating upload content: {str(e)}")
-        return False, f"Failed to validate uploaded file: {str(e)}"
+        return False, "Failed to validate uploaded file"
 
 
 async def validate_url_and_fetch_pdf(url: str) -> tuple[bool, bytes, str]:

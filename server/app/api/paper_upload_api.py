@@ -162,7 +162,7 @@ async def upload_pdf_from_url(
     url = str(request.url)
     is_valid, pdf_bytes, error_message = await validate_url_and_fetch_pdf(url)
     if not is_valid:
-        return JSONResponse(status_code=400, content={"message": error_message})
+        return JSONResponse(status_code=400, content={"message": public_error})
 
     # Create the paper upload job
     paper_upload_job_obj = PaperUploadJobCreate(
@@ -244,6 +244,12 @@ async def upload_pdf(
         file_contents, filename=str(filename or ""), source="upload"
     )
     if not is_valid:
+        public_error = (
+            "Uploaded file is invalid or unsupported"
+            if error_message.startswith("Failed to")
+            else error_message
+        )
+        logger.warning(f"Rejected upload for filename={filename}: {error_message}")
         return JSONResponse(status_code=400, content={"message": error_message})
 
     # Create the paper upload job
